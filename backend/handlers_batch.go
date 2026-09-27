@@ -24,7 +24,9 @@ func (s *Server) handleBatchList(w http.ResponseWriter, r *http.Request) {
 			b.status, b.suspend_reason,
 			(SELECT count(*) FROM kegs k WHERE k.batch_id=b.id),
 			(SELECT count(*) FROM keg_feedback f WHERE f.batch_id=b.id AND (f.taste_issue OR f.complaint)),
-			(SELECT count(DISTINCT f.bar_id) FROM keg_feedback f WHERE f.batch_id=b.id AND (f.taste_issue OR f.complaint))
+			(SELECT count(DISTINCT f.bar_id) FROM keg_feedback f WHERE f.batch_id=b.id AND (f.taste_issue OR f.complaint)),
+			COALESCE((SELECT i.investigation_no FROM batch_investigations i
+				WHERE i.batch_id=b.id AND i.status='investigating' ORDER BY i.id DESC LIMIT 1),'')
 		FROM batches b ORDER BY b.id DESC`)
 	if err != nil {
 		writeErr(w, 500, err.Error())
@@ -34,15 +36,15 @@ func (s *Server) handleBatchList(w http.ResponseWriter, r *http.Request) {
 	list := []map[string]any{}
 	for rows.Next() {
 		var id, kegTotal, complaints, complaintBars int
-		var no, style, fill, best, status, reason string
-		if err := rows.Scan(&id, &no, &style, &fill, &best, &status, &reason, &kegTotal, &complaints, &complaintBars); err != nil {
+		var no, style, fill, best, status, reason, invNo string
+		if err := rows.Scan(&id, &no, &style, &fill, &best, &status, &reason, &kegTotal, &complaints, &complaintBars, &invNo); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
 		list = append(list, map[string]any{
 			"id": id, "batch_no": no, "style": style, "fill_date": fill, "best_before": best,
 			"status": status, "suspend_reason": reason, "keg_total": kegTotal,
-			"complaints": complaints, "complaint_bars": complaintBars,
+			"complaints": complaints, "complaint_bars": complaintBars, "investigation_no": invNo,
 		})
 	}
 	writeJSON(w, 200, list)
@@ -115,6 +117,7 @@ func (s *Server) handleBatchDetail(w http.ResponseWriter, r *http.Request) {
 	feedbacks := []map[string]any{}
 	rows, err = s.db.Query(`
 		SELECT f.id, k.keg_no, COALESCE(br.name,''), f.pour_speed, f.pressure_issue, f.taste_issue, f.complaint,
+			COALESCE(f.equipment,''), COALESCE(f.taste_desc,''), COALESCE(f.photos,''),
 			f.detail, to_char(f.created_at,'YYYY-MM-DD HH24:MI')
 		FROM keg_feedback f
 		JOIN kegs k ON k.id=f.keg_id
@@ -123,18 +126,28 @@ func (s *Server) handleBatchDetail(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		for rows.Next() {
 			var fid int
-			var kno, barName, pour, detail, ts string
+			var kno, barName, pour, equipment, tasteDesc, photos, detail, ts string
 			var pressure, taste, complaint bool
-			_ = rows.Scan(&fid, &kno, &barName, &pour, &pressure, &taste, &complaint, &detail, &ts)
+			_ = rows.Scan(&fid, &kno, &barName, &pour, &pressure, &taste, &complaint,
+				&equipment, &tasteDesc, &photos, &detail, &ts)
 			feedbacks = append(feedbacks, map[string]any{
 				"id": fid, "keg_no": kno, "bar_name": barName, "pour_speed": pour,
 				"pressure_issue": pressure, "taste_issue": taste, "complaint": complaint,
+				"equipment": equipment, "taste_desc": tasteDesc, "photos": splitPhotos(photos),
 				"detail": detail, "created_at": ts,
 			})
 		}
 		rows.Close()
 	}
 	b["feedbacks"] = feedbacks
+
+	// 进行中的口味异常排查单
+	var invID int
+	var invNo string
+	if err := s.db.QueryRow(`SELECT id, investigation_no FROM batch_investigations
+		WHERE batch_id=$1 AND status='investigating' ORDER BY id DESC LIMIT 1`, id).Scan(&invID, &invNo); err == nil {
+		b["investigation"] = map[string]any{"id": invID, "investigation_no": invNo}
+	}
 
 	cases := []map[string]any{}
 	rows, err = s.db.Query(`SELECT id, case_no, case_type, status, title FROM cases WHERE batch_id=$1 ORDER BY id DESC`, id)
@@ -253,35 +266,8 @@ func (s *Server) handleBatchRecall(w http.ResponseWriter, r *http.Request) {
 	held := s.holdShipmentsForBatch(id)
 
 	// 库存拆分：已售卖 / 已开桶 / 未开桶
-	type kegRow struct {
-		id     int
-		kegNo  string
-		status string
-		bar    string
-	}
-	sold, opened, unopened := []kegRow{}, []kegRow{}, []kegRow{}
-	rows, err := s.db.Query(`
-		SELECT k.id, k.keg_no, k.status, COALESCE(b.name,''), k.emptied_at IS NOT NULL
-		FROM kegs k LEFT JOIN bars b ON b.id=k.current_bar_id WHERE k.batch_id=$1 ORDER BY k.keg_no`, id)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var kr kegRow
-			var emptied bool
-			if err := rows.Scan(&kr.id, &kr.kegNo, &kr.status, &kr.bar, &emptied); err != nil {
-				continue
-			}
-			switch {
-			case emptied || kr.status == "empty" || kr.status == "pickup_booked" || kr.status == "in_return" ||
-				kr.status == "at_wash" || kr.status == "ready_refill" || kr.status == "wash_failed" || kr.status == "lost":
-				sold = append(sold, kr)
-			case kr.status == "opened":
-				opened = append(opened, kr)
-			default:
-				unopened = append(unopened, kr)
-			}
-		}
-	}
+	sold, opened, unopened, _ := s.classifyBatchKegs(id)
+	s.closeInvestigationIfOpen(id, "recall", req.Reason)
 
 	barIDs, dealerIDs := s.batchBarsAndDealers(id)
 	content := fmt.Sprintf("批次 %s 已启动召回（%s）。已售卖 %d 桶、已开桶 %d 桶、未开桶 %d 桶；%d 个待配送/配送中订单已暂缓。已开桶/未开桶请立即停售并预约回收。",
@@ -295,16 +281,9 @@ func (s *Server) handleBatchRecall(w http.ResponseWriter, r *http.Request) {
 	s.notify(nil, "warehouse", nil, nil, "batch_recall", "批次召回通知："+batchNo, content)
 	s.notify(nil, "finance", nil, nil, "batch_recall", "批次召回通知："+batchNo, content)
 
-	toJSON := func(list []kegRow) []map[string]any {
-		out := []map[string]any{}
-		for _, kr := range list {
-			out = append(out, map[string]any{"id": kr.id, "keg_no": kr.kegNo, "status": kr.status, "bar_name": kr.bar})
-		}
-		return out
-	}
 	writeJSON(w, 200, map[string]any{
 		"status": "recalled", "held_shipments": held,
-		"sold": toJSON(sold), "opened": toJSON(opened), "unopened": toJSON(unopened),
+		"sold": kegSplitJSON(sold), "opened": kegSplitJSON(opened), "unopened": kegSplitJSON(unopened),
 		"notified_bars": len(barIDs), "notified_dealers": len(dealerIDs),
 	})
 }

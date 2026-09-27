@@ -11,6 +11,7 @@ const DEMO = [
   ['qc', 'qc123', '品控'],
   ['finance', 'finance123', '财务'],
   ['dealer1', 'dealer123', '经销商·北京'],
+  ['sales1', 'sales123', '销售人员'],
   ['admin', 'admin123', '管理员'],
 ]
 

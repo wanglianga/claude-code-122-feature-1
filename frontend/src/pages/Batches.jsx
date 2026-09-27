@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { Empty, ErrorBox, Field, Modal, OkBox, Tag } from '../components'
 import { BATCH_STATUS, CASE_STATUS, CASE_TYPE, KEG_STATUS } from '../labels'
@@ -9,6 +10,7 @@ function BatchDetail({ id, user, onClose, onChanged }) {
   const [ok, setOk] = useState('')
   const [reason, setReason] = useState('')
   const [recallResult, setRecallResult] = useState(null)
+  const navigate = useNavigate()
 
   const load = useCallback(() => {
     api(`/batches/${id}`).then(setB).catch((e) => setError(e.message))
@@ -43,6 +45,17 @@ function BatchDetail({ id, user, onClose, onChanged }) {
         <div><div className="k">状态</div><div className="v"><Tag label={BATCH_STATUS[b.status] || b.status} /></div></div>
         {b.suspend_reason && <div><div className="k">停售/召回原因</div><div className="v">{b.suspend_reason}</div></div>}
       </div>
+
+      {b.status === 'investigating' && (
+        <div className="error-box" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+          <span>该批次正处于口味异常排查中，剩余酒桶已暂停配送（在库禁出库、订单暂缓、禁止开桶），待品控结论。</span>
+          {b.investigation && (
+            <button className="small" onClick={() => { onClose(); navigate('/investigations') }}>
+              查看排查单 {b.investigation.investigation_no}
+            </button>
+          )}
+        </div>
+      )}
 
       {canOperate && b.status !== 'recalled' && (
         <div className="card" style={{ background: 'var(--panel2)' }}>
@@ -117,7 +130,7 @@ function BatchDetail({ id, user, onClose, onChanged }) {
         <h3>开桶反馈（{b.feedbacks.length}）</h3>
         {b.feedbacks.length === 0 ? <Empty /> : (
           <table>
-            <thead><tr><th>桶号</th><th>酒吧</th><th>出酒</th><th>气压</th><th>口味异常</th><th>客诉</th><th>详情</th><th>时间</th></tr></thead>
+            <thead><tr><th>桶号</th><th>酒吧</th><th>出酒</th><th>气压</th><th>口味/现象</th><th>出酒设备</th><th>客诉</th><th>照片</th><th>详情</th><th>时间</th></tr></thead>
             <tbody>
               {b.feedbacks.map((f) => (
                 <tr key={f.id}>
@@ -125,8 +138,10 @@ function BatchDetail({ id, user, onClose, onChanged }) {
                   <td>{f.bar_name}</td>
                   <td>{f.pour_speed}</td>
                   <td>{f.pressure_issue ? '⚠️' : '—'}</td>
-                  <td>{f.taste_issue ? '⚠️' : '—'}</td>
+                  <td>{f.taste_issue ? '⚠️' : '—'}{f.taste_desc ? <div className="muted">{f.taste_desc}</div> : null}</td>
+                  <td>{f.equipment || '—'}</td>
                   <td>{f.complaint ? '⚠️' : '—'}</td>
+                  <td>{f.photos.length > 0 ? `${f.photos.length} 张` : '—'}</td>
                   <td>{f.detail}</td>
                   <td className="muted">{f.created_at}</td>
                 </tr>
@@ -209,7 +224,13 @@ export default function Batches({ user }) {
                   <td><Tag label={BATCH_STATUS[b.status] || b.status} /></td>
                   <td>{b.keg_total}</td>
                   <td>{b.complaints > 0 ? <span style={{ color: 'var(--red)' }}>{b.complaints}（{b.complaint_bars}家）</span> : '—'}</td>
-                  <td><button className="small" onClick={() => setDetailId(b.id)}>详情</button></td>
+                  <td>
+                    {b.investigation_no ? (
+                      <button className="small danger" onClick={() => navigate('/investigations')}>排查中 {b.investigation_no}</button>
+                    ) : (
+                      <button className="small" onClick={() => setDetailId(b.id)}>详情</button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

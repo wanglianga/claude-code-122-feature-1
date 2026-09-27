@@ -69,6 +69,7 @@ func main() {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "接口不存在")
 	})
+	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir()))))
 	mux.HandleFunc("/", spaHandler(staticDir))
 
 	log.Printf("KegTrace 已启动，监听 :%s", port)
@@ -85,6 +86,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	})
 
 	mux.HandleFunc("POST /api/login", s.handleLogin)
+	mux.HandleFunc("POST /api/uploads", s.auth(s.handleUpload))
 
 	// 以下均需登录
 	mux.HandleFunc("GET /api/me", s.auth(s.handleMe))
@@ -96,6 +98,12 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/batches/{id}", s.auth(s.handleBatchDetail))
 	mux.HandleFunc("POST /api/batches/{id}/suspend", s.auth(s.handleBatchSuspend))
 	mux.HandleFunc("POST /api/batches/{id}/recall", s.auth(s.handleBatchRecall))
+
+	mux.HandleFunc("GET /api/investigations", s.auth(s.handleInvestigationList))
+	mux.HandleFunc("GET /api/investigations/{id}", s.auth(s.handleInvestigationDetail))
+	mux.HandleFunc("POST /api/investigations/{id}/conclude", s.auth(s.handleInvestigationConclude))
+	mux.HandleFunc("POST /api/restock/{id}/assign", s.auth(s.handleRestockAssign))
+	mux.HandleFunc("POST /api/restock/{id}/advance", s.auth(s.handleRestockAdvance))
 
 	mux.HandleFunc("GET /api/kegs", s.auth(s.handleKegList))
 	mux.HandleFunc("POST /api/kegs", s.auth(s.handleKegCreate))

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import { Empty, ErrorBox, Field, Modal, OkBox, Tag } from '../components'
-import { KEG_STATUS, POUR_SPEEDS } from '../labels'
+import { Empty, ErrorBox, FeedbackModal, Field, Modal, OkBox, Tag } from '../components'
+import { KEG_STATUS } from '../labels'
 
 // 酒吧操作台：本店酒桶的开桶 / 反馈 / 打空 / 预约回收。
 export default function BarOps({ user }) {
@@ -10,7 +10,6 @@ export default function BarOps({ user }) {
   const [error, setError] = useState('')
   const [ok, setOk] = useState('')
   const [fbKeg, setFbKeg] = useState(null)
-  const [fb, setFb] = useState({ pour_speed: '正常', pressure_issue: false, taste_issue: false, complaint: false, detail: '' })
   const [selected, setSelected] = useState([])
   const [showPickup, setShowPickup] = useState(false)
   const [pickupNote, setPickupNote] = useState('')
@@ -93,7 +92,7 @@ export default function BarOps({ user }) {
                         <button className="small primary" onClick={() => act(`/kegs/${k.id}/open`)}>开桶</button>
                       )}{' '}
                       {['at_bar', 'opened'].includes(k.status) && (
-                        <button className="small" onClick={() => { setFbKeg(k); setFb({ pour_speed: '正常', pressure_issue: false, taste_issue: false, complaint: false, detail: '' }) }}>反馈</button>
+                        <button className="small" onClick={() => setFbKeg(k)}>反馈</button>
                       )}{' '}
                       {k.status === 'opened' && (
                         <button className="small" onClick={() => act(`/kegs/${k.id}/empty`)}>打空</button>
@@ -109,27 +108,16 @@ export default function BarOps({ user }) {
       {kegs.length === 0 && <div className="card"><Empty text="本店暂无酒桶" /></div>}
 
       {fbKeg && (
-        <Modal title={`开桶反馈 · ${fbKeg.keg_no}`} onClose={() => setFbKeg(null)}>
-          <Field label="出酒速度">
-            <select value={fb.pour_speed} onChange={(e) => setFb({ ...fb, pour_speed: e.target.value })}>
-              {POUR_SPEEDS.map((s) => <option key={s}>{s}</option>)}
-            </select>
-          </Field>
-          <div className="field">
-            <label style={{ display: 'flex', gap: 16 }}>
-              <span><input type="checkbox" style={{ width: 'auto' }} checked={fb.pressure_issue} onChange={(e) => setFb({ ...fb, pressure_issue: e.target.checked })} /> 气压问题</span>
-              <span><input type="checkbox" style={{ width: 'auto' }} checked={fb.taste_issue} onChange={(e) => setFb({ ...fb, taste_issue: e.target.checked })} /> 口味异常</span>
-              <span><input type="checkbox" style={{ width: 'auto' }} checked={fb.complaint} onChange={(e) => setFb({ ...fb, complaint: e.target.checked })} /> 客诉</span>
-            </label>
-          </div>
-          <Field label="详情">
-            <textarea value={fb.detail} onChange={(e) => setFb({ ...fb, detail: e.target.value })} />
-          </Field>
-          <div className="actions">
-            <button onClick={() => setFbKeg(null)}>取消</button>
-            <button className="primary" onClick={() => act(`/kegs/${fbKeg.id}/feedback`, fb)}>提交</button>
-          </div>
-        </Modal>
+        <FeedbackModal
+          kegNo={fbKeg.keg_no}
+          onClose={() => setFbKeg(null)}
+          onSubmit={async (body) => {
+            await api(`/kegs/${fbKeg.id}/feedback`, { method: 'POST', body })
+            setFbKeg(null)
+            setOk('反馈已提交，若多家酒吧投诉同批次将自动暂停配送并建立排查')
+            load()
+          }}
+        />
       )}
 
       {showPickup && (

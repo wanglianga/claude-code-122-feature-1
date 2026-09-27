@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -35,7 +36,8 @@ func (s *Server) handleShipmentList(w http.ResponseWriter, r *http.Request) {
 		SELECT sh.id, sh.order_no, COALESCE(d.name,''), COALESCE(b.name,''), COALESCE(dr.name,''),
 			sh.status, sh.is_festival, sh.note, sh.receiver_name,
 			to_char(sh.created_at,'YYYY-MM-DD HH24:MI'),
-			(SELECT count(*) FROM shipment_kegs sk WHERE sk.shipment_id=sh.id)
+			(SELECT count(*) FROM shipment_kegs sk WHERE sk.shipment_id=sh.id),
+			COALESCE(sh.temp_c::text,'')
 		FROM shipments sh
 		LEFT JOIN dealers d ON d.id=sh.dealer_id
 		LEFT JOIN bars b ON b.id=sh.bar_id
@@ -49,16 +51,16 @@ func (s *Server) handleShipmentList(w http.ResponseWriter, r *http.Request) {
 	list := []map[string]any{}
 	for rows.Next() {
 		var id, kegCount int
-		var orderNo, dealer, bar, driver, status, note, receiver, ts string
+		var orderNo, dealer, bar, driver, status, note, receiver, ts, temp string
 		var festival bool
-		if err := rows.Scan(&id, &orderNo, &dealer, &bar, &driver, &status, &festival, &note, &receiver, &ts, &kegCount); err != nil {
+		if err := rows.Scan(&id, &orderNo, &dealer, &bar, &driver, &status, &festival, &note, &receiver, &ts, &kegCount, &temp); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
 		list = append(list, map[string]any{
 			"id": id, "order_no": orderNo, "dealer_name": dealer, "bar_name": bar, "driver_name": driver,
 			"status": status, "is_festival": festival, "note": note, "receiver_name": receiver,
-			"created_at": ts, "keg_count": kegCount,
+			"created_at": ts, "keg_count": kegCount, "temp_c": temp,
 		})
 	}
 	writeJSON(w, 200, list)
@@ -137,23 +139,29 @@ func (s *Server) handleShipmentDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var orderNo, dealer, bar, driver, status, note, receiver string
+	var tempText, tempNote string
+	var tempC sql.NullFloat64
 	var festival bool
 	var created, started, delivered, received *string
 	err = s.db.QueryRow(`
 		SELECT sh.order_no, COALESCE(d.name,''), COALESCE(b.name,''), COALESCE(dr.name,''),
 			sh.status, sh.is_festival, sh.note, sh.receiver_name,
 			to_char(sh.created_at,'YYYY-MM-DD HH24:MI'), to_char(sh.started_at,'YYYY-MM-DD HH24:MI'),
-			to_char(sh.delivered_at,'YYYY-MM-DD HH24:MI'), to_char(sh.received_at,'YYYY-MM-DD HH24:MI')
+			to_char(sh.delivered_at,'YYYY-MM-DD HH24:MI'), to_char(sh.received_at,'YYYY-MM-DD HH24:MI'),
+			sh.temp_c, COALESCE(sh.temp_note,'')
 		FROM shipments sh
 		LEFT JOIN dealers d ON d.id=sh.dealer_id
 		LEFT JOIN bars b ON b.id=sh.bar_id
 		LEFT JOIN users dr ON dr.id=sh.driver_id
 		WHERE sh.id=$1`, id).
 		Scan(&orderNo, &dealer, &bar, &driver, &status, &festival, &note, &receiver,
-			&created, &started, &delivered, &received)
+			&created, &started, &delivered, &received, &tempC, &tempNote)
 	if err != nil {
 		writeErr(w, 404, "配送单不存在")
 		return
+	}
+	if tempC.Valid {
+		tempText = fmt.Sprintf("%.1f", tempC.Float64)
 	}
 	kegs := []map[string]any{}
 	rows, err := s.db.Query(`
@@ -178,6 +186,7 @@ func (s *Server) handleShipmentDetail(w http.ResponseWriter, r *http.Request) {
 		"id": id, "order_no": orderNo, "dealer_name": dealer, "bar_name": bar, "driver_name": driver,
 		"status": status, "is_festival": festival, "note": note, "receiver_name": receiver,
 		"created_at": created, "started_at": started, "delivered_at": delivered, "received_at": received,
+		"temp_c": tempText, "temp_note": tempNote, "over_temp": tempC.Valid && tempC.Float64 > transportTempLimit,
 		"kegs": kegs,
 	})
 }
@@ -232,10 +241,25 @@ func (s *Server) handleShipmentDeliver(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "仅配送中订单可标记送达")
 		return
 	}
-	_, _ = s.db.Exec(`UPDATE shipments SET status='delivered', delivered_at=now() WHERE id=$1`, id)
+	var req struct {
+		TempC    *float64 `json:"temp_c"`
+		TempNote string   `json:"temp_note"`
+	}
+	_ = decodeBody(r, &req)
+	if _, err := s.db.Exec(`UPDATE shipments SET status='delivered', delivered_at=now(), temp_c=$1, temp_note=$2 WHERE id=$3`,
+		req.TempC, req.TempNote, id); err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
 	var barID *int
 	_ = s.db.QueryRow(`SELECT bar_id FROM shipments WHERE id=$1`, id).Scan(&barID)
-	s.notify(nil, "", barID, nil, "shipment", "酒桶已送达", "配送单已送达，请核对酒桶并确认签收。")
+	notice := "配送单已送达，请核对酒桶并确认签收。"
+	if req.TempC != nil && *req.TempC > transportTempLimit {
+		notice = fmt.Sprintf("⚠️ 送达运输温度 %.1f℃ 超过建议冷链上限 %.0f℃，签收时请重点检查风味，必要时在开桶反馈中标注。", *req.TempC, transportTempLimit)
+		s.notify(nil, "qc", nil, nil, "shipment", fmt.Sprintf("配送单 %d 运输超温", id),
+			fmt.Sprintf("配送单 %d 送达温度 %.1f℃（上限 %.0f℃），%s", id, *req.TempC, transportTempLimit, req.TempNote))
+	}
+	s.notify(nil, "", barID, nil, "shipment", "酒桶已送达", notice)
 	writeJSON(w, 200, map[string]string{"status": "delivered"})
 }
 

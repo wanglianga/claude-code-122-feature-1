@@ -163,3 +163,22 @@ tr.clickable:hover td { background: var(--panel2); }
 .note-item { border-bottom: 1px solid var(--line); padding: 8px 0; }
 .note-item:last-child { border-bottom: none; }
 .tag { display:inline-block; background: var(--panel2); border-radius: 4px; padding: 1px 7px; font-size: 12px; color: var(--muted); margin-right: 6px; }
+
+.photo-chip { position: relative; display: inline-block; }
+.photo-chip img {
+  width: 64px; height: 64px; object-fit: cover; border-radius: 6px;
+  border: 1px solid var(--line); display: block; background: #171310;
+}
+.photo-chip .photo-del {
+  position: absolute; top: -7px; right: -7px; width: 20px; height: 20px;
+  padding: 0; line-height: 18px; border-radius: 50%; background: var(--panel2);
+  border: 1px solid var(--red); color: var(--red); font-size: 14px;
+}
+.photo-add {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 64px; height: 64px; border: 1px dashed var(--line); border-radius: 6px;
+  color: var(--muted); font-size: 12px; cursor: pointer; text-align: center;
+}
+.photo-add:hover { border-color: var(--amber); color: var(--amber); }
+.evidence-photos img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); margin: 0 6px 6px 0; }
+.over-temp { color: var(--red); font-weight: 600; }

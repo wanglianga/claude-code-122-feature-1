@@ -20,8 +20,10 @@ RUN apk add --no-cache ca-certificates wget \
 WORKDIR /app
 COPY --from=be /kegtrace /app/kegtrace
 COPY --from=fe /fe/dist /app/static
+COPY --chown=appuser:appuser demo-uploads/ /app/data/uploads/
 ENV PORT=8080 \
-    STATIC_DIR=/app/static
+    STATIC_DIR=/app/static \
+    UPLOAD_DIR=/app/data/uploads
 USER appuser
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \

@@ -34,6 +34,10 @@ export default function Dashboard({ user }) {
               <div className="lbl">在售批次</div>
             </div>
             <div className="stat">
+              <div className="num" style={{ color: data.investigating_batches > 0 ? 'var(--red)' : undefined }}>{data.investigating_batches}</div>
+              <div className="lbl">排查暂停批次</div>
+            </div>
+            <div className="stat">
               <div className="num">{data.open_cases}</div>
               <div className="lbl">未结工单</div>
             </div>

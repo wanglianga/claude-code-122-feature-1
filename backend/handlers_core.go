@@ -1,7 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 )
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -63,15 +71,17 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	out["keg_status"] = kegStatus
 
-	var openCases, pendingDeposits, activeBatches, totalKegs, atBar int
+	var openCases, pendingDeposits, activeBatches, totalKegs, atBar, investigatingBatches int
 	_ = s.db.QueryRow(`SELECT count(*) FROM cases WHERE status <> 'resolved'`).Scan(&openCases)
 	_ = s.db.QueryRow(`SELECT count(*) FROM deposit_ledger WHERE status='pending'`).Scan(&pendingDeposits)
 	_ = s.db.QueryRow(`SELECT count(*) FROM batches WHERE status='active'`).Scan(&activeBatches)
+	_ = s.db.QueryRow(`SELECT count(*) FROM batches WHERE status='investigating'`).Scan(&investigatingBatches)
 	_ = s.db.QueryRow(`SELECT count(*) FROM kegs`).Scan(&totalKegs)
 	_ = s.db.QueryRow(`SELECT count(*) FROM kegs WHERE status IN ('at_bar','opened')`).Scan(&atBar)
 	out["open_cases"] = openCases
 	out["pending_deposits"] = pendingDeposits
 	out["active_batches"] = activeBatches
+	out["investigating_batches"] = investigatingBatches
 	out["total_kegs"] = totalKegs
 	out["at_bar_kegs"] = atBar
 
@@ -210,4 +220,51 @@ func (s *Server) handleLateReturnCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"created": n})
+}
+
+// uploadDir 客诉照片存储目录（演示用本地磁盘，生产应换对象存储）。
+func uploadDir() string {
+	if d := os.Getenv("UPLOAD_DIR"); d != "" {
+		return d
+	}
+	return "./data/uploads"
+}
+
+// handleUpload 接收客诉照片（multipart 字段 file），仅允许图片，返回可访问 URL 与文件名。
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		writeErr(w, 400, "请上传图片文件（≤8MB）")
+		return
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeErr(w, 400, "未找到上传文件")
+		return
+	}
+	defer file.Close()
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	allowed := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true}
+	if !allowed[ext] {
+		writeErr(w, 400, "仅支持 jpg/png/gif/webp 图片")
+		return
+	}
+	dir := uploadDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		writeErr(w, 500, "创建存储目录失败")
+		return
+	}
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	name := fmt.Sprintf("complaint-%d-%s%s", time.Now().Unix(), hex.EncodeToString(b), ext)
+	dst, err := os.Create(filepath.Join(dir, name))
+	if err != nil {
+		writeErr(w, 500, "保存文件失败")
+		return
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, file); err != nil {
+		writeErr(w, 500, "写入文件失败")
+		return
+	}
+	writeJSON(w, 200, map[string]string{"name": name, "url": "/uploads/" + name})
 }

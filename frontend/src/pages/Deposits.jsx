@@ -71,9 +71,10 @@ export default function Deposits({ user }) {
               <div>收取：{fmt(v.charge_settled)}</div>
               <div style={{ color: 'var(--green)' }}>已释放：{fmt(v.release_settled)}</div>
               <div style={{ color: 'var(--red)' }}>已扣减：{fmt(v.deduction_settled)}</div>
-              {(v.release_pending || v.deduction_pending) && (
+              <div style={{ color: 'var(--amber)' }}>折价补偿：{fmt(v.discount_settled)}</div>
+              {(v.release_pending || v.deduction_pending || v.discount_pending) && (
                 <div className="muted">
-                  待结算：释放 {fmt(v.release_pending)} / 扣减 {fmt(v.deduction_pending)}
+                  待结算：释放 {fmt(v.release_pending)} / 扣减 {fmt(v.deduction_pending)} / 折价 {fmt(v.discount_pending)}
                 </div>
               )}
             </div>

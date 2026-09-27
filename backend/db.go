@@ -175,6 +175,37 @@ func migrate(db *sql.DB) error {
 			detail TEXT DEFAULT '',
 			created_at TIMESTAMPTZ DEFAULT now()
 		)`,
+		// 口味异常批次排查单：多家酒吧投诉同批次时自动创建，品控确认前该批次暂停配送。
+		`CREATE TABLE IF NOT EXISTS batch_investigations (
+			id SERIAL PRIMARY KEY,
+			investigation_no TEXT UNIQUE NOT NULL,
+			batch_id INT REFERENCES batches(id),
+			status TEXT NOT NULL DEFAULT 'investigating', -- investigating / concluded
+			conclusion TEXT DEFAULT '',                   -- recall / discount / clear
+			conclusion_note TEXT DEFAULT '',
+			concluded_by INT,
+			discount_rate INT NOT NULL DEFAULT 0,         -- 折价比例（%），conclusion=discount 时使用
+			created_at TIMESTAMPTZ DEFAULT now(),
+			concluded_at TIMESTAMPTZ
+		)`,
+		// 召回/折价后的仓库备货任务：为受影响酒吧准备可替换批次。
+		`CREATE TABLE IF NOT EXISTS restock_tasks (
+			id SERIAL PRIMARY KEY,
+			investigation_id INT REFERENCES batch_investigations(id),
+			bar_id INT REFERENCES bars(id),
+			replace_batch_id INT REFERENCES batches(id),
+			keg_count INT NOT NULL DEFAULT 0,
+			status TEXT NOT NULL DEFAULT 'open',          -- open / stocking / done
+			note TEXT DEFAULT '',
+			created_at TIMESTAMPTZ DEFAULT now(),
+			done_at TIMESTAMPTZ
+		)`,
+		// 迁移列（幂等）
+		`ALTER TABLE keg_feedback ADD COLUMN IF NOT EXISTS equipment TEXT DEFAULT ''`,      // 出酒设备（酒头/扎啤机/酒柱）
+		`ALTER TABLE keg_feedback ADD COLUMN IF NOT EXISTS taste_desc TEXT DEFAULT ''`,     // 口味现象（氧化味/纸板味/酸败…）
+		`ALTER TABLE keg_feedback ADD COLUMN IF NOT EXISTS photos TEXT NOT NULL DEFAULT ''`, // 客诉照片文件名，逗号分隔
+		`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS temp_c NUMERIC(5,1)`,               // 送达时运输温度（℃）
+		`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS temp_note TEXT DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_kegs_status ON kegs(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_kegs_batch ON kegs(batch_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_kegs_bar ON kegs(current_bar_id)`,

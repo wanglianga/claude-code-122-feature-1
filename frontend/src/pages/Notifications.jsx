@@ -10,6 +10,8 @@ const NTYPE = {
   wash: '清洗',
   batch_suspend: '批次停售',
   batch_recall: '批次召回',
+  investigation: '批次排查',
+  restock: '换货备货',
 }
 
 export default function Notifications() {
@@ -44,7 +46,7 @@ export default function Notifications() {
           list.map((n) => (
             <div className="note-item" key={n.id} style={{ opacity: n.read ? 0.55 : 1 }}>
               <div>
-                <Tag label={NTYPE[n.ntype] || n.ntype} tone={n.ntype === 'batch_recall' ? 'red' : n.ntype === 'batch_suspend' ? 'amber' : 'blue'} />{' '}
+                <Tag label={NTYPE[n.ntype] || n.ntype} tone={n.ntype === 'batch_recall' || n.ntype === 'investigation' ? 'red' : n.ntype === 'batch_suspend' || n.ntype === 'restock' ? 'amber' : 'blue'} />{' '}
                 <b>{n.title}</b>
                 {!n.read && <span style={{ color: 'var(--red)' }}> ●</span>}
                 <span className="muted" style={{ float: 'right', fontSize: 12 }}>{n.created_at}</span>

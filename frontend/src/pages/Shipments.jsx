@@ -94,6 +94,13 @@ function ShipmentDetail({ id, onClose }) {
         <div><div className="k">节日临时铺货</div><div className="v">{s.is_festival ? '是' : '否'}</div></div>
         <div><div className="k">收货人</div><div className="v">{s.receiver_name || '—'}</div></div>
         <div><div className="k">创建</div><div className="v">{s.created_at}</div></div>
+        <div><div className="k">送达时间</div><div className="v">{s.delivered_at || '—'}</div></div>
+        <div><div className="k">运输温度</div>
+          <div className="v">
+            {s.temp_c ? <span className={s.over_temp ? 'over-temp' : ''}>🌡️ {s.temp_c}℃{s.over_temp ? '（超 8℃，已通知品控）' : ''}</span> : '—'}
+            {s.temp_note ? <div className="muted">{s.temp_note}</div> : null}
+          </div>
+        </div>
         <div><div className="k">签收</div><div className="v">{s.received_at || '—'}</div></div>
         {s.note && <div><div className="k">备注</div><div className="v">{s.note}</div></div>}
       </div>
@@ -124,6 +131,9 @@ export default function Shipments({ user }) {
   const [detailId, setDetailId] = useState(null)
   const [receiveId, setReceiveId] = useState(null)
   const [receiver, setReceiver] = useState('')
+  const [deliverId, setDeliverId] = useState(null)
+  const [tempC, setTempC] = useState('4')
+  const [tempNote, setTempNote] = useState('')
 
   const load = useCallback(() => {
     api('/shipments').then(setList).catch((e) => setError(e.message))
@@ -141,6 +151,8 @@ export default function Shipments({ user }) {
       setOk('操作成功')
       setReceiveId(null)
       setReceiver('')
+      setDeliverId(null)
+      setTempNote('')
       load()
     } catch (e) {
       setError(e.message)
@@ -163,7 +175,7 @@ export default function Shipments({ user }) {
         {list.length === 0 ? <Empty /> : (
           <table>
             <thead>
-              <tr><th>单号</th><th>酒吧</th><th>经销商</th><th>司机</th><th>桶数</th><th>状态</th><th>临时铺货</th><th>创建时间</th><th>操作</th></tr>
+              <tr><th>单号</th><th>酒吧</th><th>经销商</th><th>司机</th><th>桶数</th><th>状态</th><th>运输温度</th><th>临时铺货</th><th>创建时间</th><th>操作</th></tr>
             </thead>
             <tbody>
               {list.map((s) => (
@@ -174,6 +186,7 @@ export default function Shipments({ user }) {
                   <td>{s.driver_name}</td>
                   <td>{s.keg_count}</td>
                   <td><Tag label={SHIPMENT_STATUS[s.status] || s.status} /></td>
+                  <td>{s.temp_c ? <span className={Number(s.temp_c) > 8 ? 'over-temp' : ''}>🌡️ {s.temp_c}℃{Number(s.temp_c) > 8 ? ' 超温' : ''}</span> : <span className="muted">—</span>}</td>
                   <td>{s.is_festival ? '🎉' : '—'}</td>
                   <td className="muted">{s.created_at}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>
@@ -182,7 +195,7 @@ export default function Shipments({ user }) {
                       <button className="small primary" onClick={() => act(`/shipments/${s.id}/start`)}>开始配送</button>
                     )}
                     {user.role === 'driver' && s.status === 'in_transit' && (
-                      <button className="small primary" onClick={() => act(`/shipments/${s.id}/deliver`)}>送达</button>
+                      <button className="small primary" onClick={() => { setDeliverId(s.id); setTempC('4'); setTempNote('') }}>送达(录温度)</button>
                     )}
                     {user.role === 'bar_manager' && (s.status === 'delivered' || s.status === 'in_transit') && (
                       <button className="small primary" onClick={() => setReceiveId(s.id)}>签收</button>
@@ -209,6 +222,24 @@ export default function Shipments({ user }) {
             <button onClick={() => setReceiveId(null)}>取消</button>
             <button className="primary" disabled={!receiver} onClick={() => act(`/shipments/${receiveId}/receive`, { receiver_name: receiver })}>
               确认签收（收取押金）
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {deliverId && (
+        <Modal title="确认送达 · 登记运输温度" onClose={() => setDeliverId(null)}>
+          <Field label="送达时车厢/酒液温度（℃，冷链建议 ≤ 8℃）">
+            <input type="number" step="0.1" value={tempC} onChange={(e) => setTempC(e.target.value)} />
+          </Field>
+          <Field label="运输温度备注（如途中制冷故障、暴晒时长）">
+            <input value={tempNote} onChange={(e) => setTempNote(e.target.value)} placeholder="可留空；超温将通知品控并计入批次排查证据" />
+          </Field>
+          <div className="actions">
+            <button onClick={() => setDeliverId(null)}>取消</button>
+            <button className="primary" disabled={tempC === ''}
+              onClick={() => act(`/shipments/${deliverId}/deliver`, { temp_c: Number(tempC), temp_note: tempNote })}>
+              确认送达
             </button>
           </div>
         </Modal>

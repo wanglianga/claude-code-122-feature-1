@@ -14,13 +14,15 @@ import Wash from './pages/Wash'
 import Cases from './pages/Cases'
 import Deposits from './pages/Deposits'
 import Notifications from './pages/Notifications'
+import Investigations from './pages/Investigations'
 import Admin from './pages/Admin'
 
 const MENU = [
   { path: '/', label: '仪表盘', roles: null },
-  { path: '/batches', label: '批次管理', roles: ['admin', 'warehouse', 'qc', 'finance', 'dealer'] },
+  { path: '/batches', label: '批次管理', roles: ['admin', 'warehouse', 'qc', 'finance', 'dealer', 'sales'] },
+  { path: '/investigations', label: '批次排查', roles: ['admin', 'qc', 'warehouse', 'sales', 'finance', 'dealer'] },
   { path: '/kegs', label: '酒桶追溯', roles: null },
-  { path: '/shipments', label: '配送订单', roles: ['admin', 'warehouse', 'driver', 'bar_manager', 'dealer'] },
+  { path: '/shipments', label: '配送订单', roles: ['admin', 'warehouse', 'driver', 'bar_manager', 'dealer', 'sales'] },
   { path: '/bar', label: '酒吧操作', roles: ['bar_manager'] },
   { path: '/pickups', label: '回收预约', roles: ['admin', 'warehouse', 'driver', 'bar_manager'] },
   { path: '/wash', label: '清洗检测', roles: ['admin', 'washer', 'qc'] },
@@ -107,6 +109,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard user={user} />} />
           <Route path="/batches" element={<Batches user={user} />} />
+          <Route path="/investigations" element={<Investigations user={user} />} />
           <Route path="/kegs" element={<Kegs user={user} />} />
           <Route path="/kegs/:id" element={<KegDetail user={user} />} />
           <Route path="/shipments" element={<Shipments user={user} />} />

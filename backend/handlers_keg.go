@@ -154,16 +154,18 @@ func (s *Server) handleKegDetail(w http.ResponseWriter, r *http.Request) {
 	out["events"] = events
 
 	feedbacks := []map[string]any{}
-	rows, err = s.db.Query(`SELECT f.pour_speed, f.pressure_issue, f.taste_issue, f.complaint, f.detail,
-		COALESCE(br.name,''), to_char(f.created_at,'YYYY-MM-DD HH24:MI')
+	rows, err = s.db.Query(`SELECT f.pour_speed, f.pressure_issue, f.taste_issue, f.complaint,
+		COALESCE(f.equipment,''), COALESCE(f.taste_desc,''), COALESCE(f.photos,''),
+		f.detail, COALESCE(br.name,''), to_char(f.created_at,'YYYY-MM-DD HH24:MI')
 		FROM keg_feedback f LEFT JOIN bars br ON br.id=f.bar_id WHERE f.keg_id=$1 ORDER BY f.id`, id)
 	if err == nil {
 		for rows.Next() {
-			var pour, detail, bar, ts string
+			var pour, equipment, tasteDesc, photos, detail, bar, ts string
 			var p, t, c bool
-			_ = rows.Scan(&pour, &p, &t, &c, &detail, &bar, &ts)
+			_ = rows.Scan(&pour, &p, &t, &c, &equipment, &tasteDesc, &photos, &detail, &bar, &ts)
 			feedbacks = append(feedbacks, map[string]any{
 				"pour_speed": pour, "pressure_issue": p, "taste_issue": t, "complaint": c,
+				"equipment": equipment, "taste_desc": tasteDesc, "photos": splitPhotos(photos),
 				"detail": detail, "bar_name": bar, "time": ts,
 			})
 		}
@@ -278,11 +280,14 @@ func (s *Server) handleKegFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PourSpeed     string `json:"pour_speed"`
-		PressureIssue bool   `json:"pressure_issue"`
-		TasteIssue    bool   `json:"taste_issue"`
-		Complaint     bool   `json:"complaint"`
-		Detail        string `json:"detail"`
+		PourSpeed     string   `json:"pour_speed"`
+		PressureIssue bool     `json:"pressure_issue"`
+		TasteIssue    bool     `json:"taste_issue"`
+		Complaint     bool     `json:"complaint"`
+		Equipment     string   `json:"equipment"`
+		TasteDesc     string   `json:"taste_desc"`
+		Photos        []string `json:"photos"`
+		Detail        string   `json:"detail"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeErr(w, 400, "请求格式错误")
@@ -292,15 +297,17 @@ func (s *Server) handleKegFeedback(w http.ResponseWriter, r *http.Request) {
 	var kegNo, batchNo string
 	_ = s.db.QueryRow(`SELECT k.batch_id, k.keg_no, COALESCE(b.batch_no,'') FROM kegs k
 		LEFT JOIN batches b ON b.id=k.batch_id WHERE k.id=$1`, id).Scan(&batchID, &kegNo, &batchNo)
-	if _, err := s.db.Exec(`INSERT INTO keg_feedback (keg_id, batch_id, bar_id, pour_speed, pressure_issue, taste_issue, complaint, detail, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		id, batchID, u.BarID, req.PourSpeed, req.PressureIssue, req.TasteIssue, req.Complaint, req.Detail, u.ID); err != nil {
+	photos := strings.Join(req.Photos, ",")
+	if _, err := s.db.Exec(`INSERT INTO keg_feedback (keg_id, batch_id, bar_id, pour_speed, pressure_issue, taste_issue, complaint, equipment, taste_desc, photos, detail, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+		id, batchID, u.BarID, req.PourSpeed, req.PressureIssue, req.TasteIssue, req.Complaint,
+		req.Equipment, req.TasteDesc, photos, req.Detail, u.ID); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
 	s.logEvent(id, "开桶反馈", u, req.Detail)
 
-	// 批次口味被多家投诉 → 自动生成品控工单
+	// 批次口味被多家投诉 → 自动生成品控工单 + 自动建立口味异常排查单（暂停配送）
 	if req.TasteIssue || req.Complaint {
 		var bars int
 		_ = s.db.QueryRow(`SELECT count(DISTINCT bar_id) FROM keg_feedback
@@ -317,6 +324,8 @@ func (s *Server) handleKegFeedback(w http.ResponseWriter, r *http.Request) {
 					s.notify(nil, "warehouse", nil, nil, "case", "批次口味投诉工单 "+caseNo, detail)
 				}
 			}
+			// 多家酒吧反馈同一批 → 关联证据链并暂停该批次剩余酒桶配送，待品控结论
+			s.maybeOpenInvestigation(batchID)
 		}
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})
