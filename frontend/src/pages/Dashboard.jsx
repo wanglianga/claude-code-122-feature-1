@@ -38,6 +38,10 @@ export default function Dashboard({ user }) {
               <div className="lbl">未结工单</div>
             </div>
             <div className="stat">
+              <div className="num">{data.open_investigations}</div>
+              <div className="lbl">口味排查中</div>
+            </div>
+            <div className="stat">
               <div className="num">{data.pending_deposits}</div>
               <div className="lbl">待结算押金</div>
             </div>

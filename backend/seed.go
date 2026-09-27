@@ -62,6 +62,7 @@ func seed(db *sql.DB) error {
 		{"washer", "washer123", "清洗厂小赵", "washer", "北京", nil, nil},
 		{"qc", "qc123", "品控老陈", "qc", "北京", nil, nil},
 		{"finance", "finance123", "财务小钱", "finance", "北京", nil, nil},
+		{"sales", "sales123", "销售小周", "sales", "北京", nil, nil},
 		{"dealer1", "dealer123", "京华酒业对接人", "dealer", "北京", 1, nil},
 		{"dealer2", "dealer123", "沪上精酿对接人", "dealer", "上海", 2, nil},
 	}
@@ -125,6 +126,8 @@ func seed(db *sql.DB) error {
 		{"KEG-5002", 50, 5, 300, "at_wash", 2, true},
 		{"KEG-5003", 50, 5, 300, "ready_refill", 2, true},
 		{"KEG-5004", 50, 5, 300, "wash_failed", 2, false},
+		// 追加在末尾，保持上方既有酒桶的 ID 不变（KEG-1009 = id 21）
+		{"KEG-1009", 50, 1, 300, "opened", 3, true},
 	}
 	for _, kk := range kegs {
 		if err := ex(`INSERT INTO kegs (keg_no, capacity_liters, batch_id, deposit_amount, status, current_bar_id, refill_eligible)
@@ -142,6 +145,8 @@ func seed(db *sql.DB) error {
 		{"KEG-1008", "delivered_at", "now() - interval '14 days'"},
 		{"KEG-1008", "opened_at", "now() - interval '12 days'"},
 		{"KEG-1008", "emptied_at", "now() - interval '2 days'"},
+		{"KEG-1009", "delivered_at", "now() - interval '6 days'"},
+		{"KEG-1009", "opened_at", "now() - interval '2 days'"},
 		{"KEG-2003", "delivered_at", "now() - interval '10 days'"},
 		{"KEG-4001", "delivered_at", "now() - interval '8 days'"},
 		{"KEG-4001", "opened_at", "now() - interval '6 days'"},
@@ -163,11 +168,11 @@ func seed(db *sql.DB) error {
 	}
 
 	// ---------- 配送单 ----------
-	// SH1 已签收（bar1 的 4 只桶）
+	// SH1 已签收（bar1 的 4 只桶；运输温度 12.5℃，冷链断链嫌疑，供口味排查关联）
 	var sh1 int
-	if err := db.QueryRow(`INSERT INTO shipments (order_no, dealer_id, bar_id, driver_id, status, receiver_name,
+	if err := db.QueryRow(`INSERT INTO shipments (order_no, dealer_id, bar_id, driver_id, status, receiver_name, transport_temp_c,
 			created_at, started_at, delivered_at, received_at)
-		VALUES ('', 1, 1, $1, 'received', '张三',
+		VALUES ('', 1, 1, $1, 'received', '张三', 12.5,
 			now() - interval '15 days', now() - interval '15 days', now() - interval '14 days', now() - interval '14 days')
 		RETURNING id`, driverID).Scan(&sh1); err != nil {
 		return err
@@ -180,10 +185,10 @@ func seed(db *sql.DB) error {
 			return err
 		}
 	}
-	// SH2 配送中（bar3 的 2 只世涛）
+	// SH2 配送中（bar3 的 2 只世涛，冷链正常 4.0℃）
 	var sh2 int
-	if err := db.QueryRow(`INSERT INTO shipments (order_no, dealer_id, bar_id, driver_id, status, created_at, started_at)
-		VALUES ('', 2, 3, $1, 'in_transit', now() - interval '2 days', now() - interval '1 days') RETURNING id`, driverID).Scan(&sh2); err != nil {
+	if err := db.QueryRow(`INSERT INTO shipments (order_no, dealer_id, bar_id, driver_id, status, transport_temp_c, created_at, started_at)
+		VALUES ('', 2, 3, $1, 'in_transit', 4.0, now() - interval '2 days', now() - interval '1 days') RETURNING id`, driverID).Scan(&sh2); err != nil {
 		return err
 	}
 	if err := ex(`UPDATE shipments SET order_no=$1 WHERE id=$2`, fmt.Sprintf("SO%06d", sh2), sh2); err != nil {
@@ -210,19 +215,25 @@ func seed(db *sql.DB) error {
 	}
 
 	// ---------- 开桶反馈 ----------
+	// 演示用客诉照片（内联 SVG data URL，模拟酒吧上传的客诉照片）
+	photoIPA := "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNjAiIGhlaWdodD0iMTAwIj48cmVjdCB3aWR0aD0iMTYwIiBoZWlnaHQ9IjEwMCIgZmlsbD0iIzdjMmQxMiIvPjx0ZXh0IHg9IjEyIiB5PSI0MCIgZmlsbD0iI2ZmZiIgZm9udC1zaXplPSIxNCI+5a6i6K+J54Wn54mHPC90ZXh0Pjx0ZXh0IHg9IjEyIiB5PSI2MiIgZmlsbD0iI2ZkZTY4YSIgZm9udC1zaXplPSIxMiI+SVBBIOawp+WMluWRs8K357q45p2/5ZGzPC90ZXh0Pjwvc3ZnPgo="
+	photosIPA := `["` + photoIPA + `"]`
 	fb := []struct {
 		keg, batch, bar     int
 		pour                string
 		pressure, taste, cp bool
+		equipment           string
+		photos              string
 		detail              string
 	}{
-		{7, 1, 1, "偏慢", true, false, false, "出酒偏慢，气压表不稳，高峰期跟不上"},
-		{14, 4, 1, "正常", false, true, true, "酸啤有纸板味，两桌客人退酒"},
-		{15, 4, 3, "正常", false, true, true, "多名客人反映有哈喇味，已停售该桶"},
+		{7, 1, 1, "偏慢", true, false, false, "酒柱", "", "出酒偏慢，气压表不稳，高峰期跟不上"},
+		{7, 1, 1, "正常", false, true, true, "酒柱", photosIPA, "IPA 有氧化味（纸板/湿纸壳味），香气明显衰减，一桌客人退酒"},
+		{14, 4, 1, "正常", false, true, true, "酒头直出", photosIPA, "酸啤有纸板味，两桌客人退酒"},
+		{15, 4, 3, "正常", false, true, true, "长距离管线", photosIPA, "多名客人反映有哈喇味，已停售该桶"},
 	}
 	for _, f := range fb {
-		if err := ex(`INSERT INTO keg_feedback (keg_id, batch_id, bar_id, pour_speed, pressure_issue, taste_issue, complaint, detail, created_by)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8, 1)`, f.keg, f.batch, f.bar, f.pour, f.pressure, f.taste, f.cp, f.detail); err != nil {
+		if err := ex(`INSERT INTO keg_feedback (keg_id, batch_id, bar_id, pour_speed, pressure_issue, taste_issue, complaint, equipment, photos, detail, created_by)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, 1)`, f.keg, f.batch, f.bar, f.pour, f.pressure, f.taste, f.cp, f.equipment, f.photos, f.detail); err != nil {
 			return err
 		}
 	}
@@ -245,7 +256,7 @@ func seed(db *sql.DB) error {
 	}{
 		{5, 1, 300, "2026-09"}, {6, 1, 300, "2026-09"}, {7, 1, 300, "2026-09"}, {8, 1, 300, "2026-09"},
 		{11, 3, 300, "2026-09"}, {14, 1, 300, "2026-09"}, {15, 3, 300, "2026-09"}, {16, 2, 300, "2026-09"},
-		{17, 2, 300, "2026-08"},
+		{17, 2, 300, "2026-08"}, {21, 3, 300, "2026-09"},
 	}
 	for _, c := range charges {
 		if err := ex(`INSERT INTO deposit_ledger (keg_id, bar_id, entry_type, amount, reason, period, status)
@@ -282,12 +293,24 @@ func seed(db *sql.DB) error {
 		return err
 	}
 
+	// ---------- 口味异常排查（酸啤批次已被 2 家酒吧投诉 → 自动排查 + 暂停配送） ----------
+	if err := ex(`INSERT INTO investigations (inv_no, batch_id, trigger_detail)
+		VALUES ('INV000001', 4, '已有 2 家酒吧反馈该批次酸啤口味异常/客诉（纸板味、哈喇味），品控确认前批次剩余酒桶暂停配送。')`); err != nil {
+		return err
+	}
+	if err := ex(`UPDATE batches SET delivery_hold=TRUE WHERE id=4`); err != nil {
+		return err
+	}
+
 	// ---------- 通知 ----------
 	notifs := []struct {
 		role, ntype, title, content string
 		barID                       any
 	}{
 		{"qc", "case", "批次口味投诉工单 C000001", "SOUR-20260912 已被 2 家酒吧投诉口味异常，请尽快评估。", nil},
+		{"qc", "investigation", "口味异常排查 INV000001", "SOUR-20260912 已被 2 家酒吧反馈口味异常，批次已暂停配送，请品控尽快给出结论。", nil},
+		{"sales", "investigation", "口味异常排查 INV000001", "SOUR-20260912 排查中，批次暂停配送。请销售关注受影响酒吧并准备替换批次。", nil},
+		{"warehouse", "investigation", "口味异常排查 INV000001", "SOUR-20260912 排查中，批次剩余酒桶暂停配送，请勿出库。", nil},
 		{"washer", "wash", "有待清洗酒桶", "KEG-5002 已送达清洗厂，请及时检测。", nil},
 		{"finance", "deposit", "押金待释放：KEG-5003", "KEG-5003 已完成回收并清洗合格，建议释放押金 ¥300.00。", nil},
 		{"finance", "case", "逾期归还工单 C000003", "KEG-5001 超过 30 天未归还，请关注押金扣减。", nil},
@@ -303,10 +326,10 @@ func seed(db *sql.DB) error {
 
 	// ---------- 酒桶事件时间线 ----------
 	events := []struct {
-		keg     int
-		event   string
-		actor   string
-		detail  string
+		keg    int
+		event  string
+		actor  string
+		detail string
 	}{
 		{5, "灌装入库", "仓库老王", "批次 IPA-20260901 灌装，入酒厂仓库"},
 		{5, "出库配送", "仓库老王", "配送单发往「三里屯野鹅酒吧」"},
@@ -314,7 +337,11 @@ func seed(db *sql.DB) error {
 		{7, "酒吧签收", "野鹅店长张三", "收货人：张三"},
 		{7, "开桶", "野鹅店长张三", "开桶上枪"},
 		{7, "开桶反馈", "野鹅店长张三", "出酒偏慢，气压不稳"},
+		{7, "开桶反馈", "野鹅店长张三", "IPA 氧化味+客诉"},
 		{8, "打空", "野鹅店长张三", "酒桶已打空"},
+		{21, "灌装入库", "仓库老王", "批次 IPA-20260901 灌装，入酒厂仓库"},
+		{21, "酒吧签收", "泡沫店长王五", "收货人：王五"},
+		{21, "开桶", "泡沫店长王五", "开桶上枪"},
 		{14, "开桶反馈", "野鹅店长张三", "口味异常+客诉"},
 		{15, "开桶反馈", "泡沫店长王五", "口味异常+客诉"},
 		{17, "酒吧签收", "望京麦浪酒吧", "收货人：李四"},

@@ -4,7 +4,7 @@ import { Empty, ErrorBox, Field, Modal, OkBox, Tag } from '../components'
 import { KEG_STATUS, SHIPMENT_STATUS } from '../labels'
 
 function CreateShipment({ meta, onClose, onCreated }) {
-  const [form, setForm] = useState({ bar_id: '', driver_id: '', is_festival: false, note: '' })
+  const [form, setForm] = useState({ bar_id: '', driver_id: '', is_festival: false, transport_temp_c: '', note: '' })
   const [kegs, setKegs] = useState([])
   const [selected, setSelected] = useState([])
   const [error, setError] = useState('')
@@ -20,7 +20,13 @@ function CreateShipment({ meta, onClose, onCreated }) {
     try {
       await api('/shipments', {
         method: 'POST',
-        body: { ...form, bar_id: Number(form.bar_id), driver_id: Number(form.driver_id), keg_ids: selected },
+        body: {
+          ...form,
+          bar_id: Number(form.bar_id),
+          driver_id: Number(form.driver_id),
+          keg_ids: selected,
+          transport_temp_c: form.transport_temp_c === '' ? undefined : Number(form.transport_temp_c),
+        },
       })
       onCreated()
     } catch (e) {
@@ -51,6 +57,9 @@ function CreateShipment({ meta, onClose, onCreated }) {
             onChange={(e) => setForm({ ...form, is_festival: e.target.checked })} /> 节日临时铺货
         </label>
       </div>
+      <Field label="运输温度（℃，冷链记录，可选）">
+        <input type="number" step="0.1" value={form.transport_temp_c} onChange={(e) => setForm({ ...form, transport_temp_c: e.target.value })} placeholder="如 4.0" />
+      </Field>
       <Field label="备注">
         <input value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} placeholder="如：中秋国庆临时铺货" />
       </Field>
@@ -93,6 +102,7 @@ function ShipmentDetail({ id, onClose }) {
         <div><div className="k">司机</div><div className="v">{s.driver_name}</div></div>
         <div><div className="k">节日临时铺货</div><div className="v">{s.is_festival ? '是' : '否'}</div></div>
         <div><div className="k">收货人</div><div className="v">{s.receiver_name || '—'}</div></div>
+        <div><div className="k">运输温度</div><div className="v">{s.transport_temp_c != null ? `${s.transport_temp_c}℃` : '—'}</div></div>
         <div><div className="k">创建</div><div className="v">{s.created_at}</div></div>
         <div><div className="k">签收</div><div className="v">{s.received_at || '—'}</div></div>
         {s.note && <div><div className="k">备注</div><div className="v">{s.note}</div></div>}
@@ -124,6 +134,8 @@ export default function Shipments({ user }) {
   const [detailId, setDetailId] = useState(null)
   const [receiveId, setReceiveId] = useState(null)
   const [receiver, setReceiver] = useState('')
+  const [deliverId, setDeliverId] = useState(null)
+  const [deliverTemp, setDeliverTemp] = useState('')
 
   const load = useCallback(() => {
     api('/shipments').then(setList).catch((e) => setError(e.message))
@@ -141,6 +153,8 @@ export default function Shipments({ user }) {
       setOk('操作成功')
       setReceiveId(null)
       setReceiver('')
+      setDeliverId(null)
+      setDeliverTemp('')
       load()
     } catch (e) {
       setError(e.message)
@@ -182,7 +196,7 @@ export default function Shipments({ user }) {
                       <button className="small primary" onClick={() => act(`/shipments/${s.id}/start`)}>开始配送</button>
                     )}
                     {user.role === 'driver' && s.status === 'in_transit' && (
-                      <button className="small primary" onClick={() => act(`/shipments/${s.id}/deliver`)}>送达</button>
+                      <button className="small primary" onClick={() => setDeliverId(s.id)}>送达</button>
                     )}
                     {user.role === 'bar_manager' && (s.status === 'delivered' || s.status === 'in_transit') && (
                       <button className="small primary" onClick={() => setReceiveId(s.id)}>签收</button>
@@ -209,6 +223,19 @@ export default function Shipments({ user }) {
             <button onClick={() => setReceiveId(null)}>取消</button>
             <button className="primary" disabled={!receiver} onClick={() => act(`/shipments/${receiveId}/receive`, { receiver_name: receiver })}>
               确认签收（收取押金）
+            </button>
+          </div>
+        </Modal>
+      )}
+      {deliverId && (
+        <Modal title="确认送达" onClose={() => setDeliverId(null)}>
+          <Field label="实际运输温度（℃，可选）">
+            <input type="number" step="0.1" value={deliverTemp} onChange={(e) => setDeliverTemp(e.target.value)} placeholder="冷链车实测温度，如 4.0" />
+          </Field>
+          <div className="actions">
+            <button onClick={() => setDeliverId(null)}>取消</button>
+            <button className="primary" onClick={() => act(`/shipments/${deliverId}/deliver`, deliverTemp === '' ? {} : { transport_temp_c: Number(deliverTemp) })}>
+              确认送达
             </button>
           </div>
         </Modal>

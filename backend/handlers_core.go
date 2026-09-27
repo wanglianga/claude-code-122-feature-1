@@ -63,17 +63,19 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	out["keg_status"] = kegStatus
 
-	var openCases, pendingDeposits, activeBatches, totalKegs, atBar int
+	var openCases, pendingDeposits, activeBatches, totalKegs, atBar, openInvestigations int
 	_ = s.db.QueryRow(`SELECT count(*) FROM cases WHERE status <> 'resolved'`).Scan(&openCases)
 	_ = s.db.QueryRow(`SELECT count(*) FROM deposit_ledger WHERE status='pending'`).Scan(&pendingDeposits)
 	_ = s.db.QueryRow(`SELECT count(*) FROM batches WHERE status='active'`).Scan(&activeBatches)
 	_ = s.db.QueryRow(`SELECT count(*) FROM kegs`).Scan(&totalKegs)
 	_ = s.db.QueryRow(`SELECT count(*) FROM kegs WHERE status IN ('at_bar','opened')`).Scan(&atBar)
+	_ = s.db.QueryRow(`SELECT count(*) FROM investigations WHERE status='investigating'`).Scan(&openInvestigations)
 	out["open_cases"] = openCases
 	out["pending_deposits"] = pendingDeposits
 	out["active_batches"] = activeBatches
 	out["total_kegs"] = totalKegs
 	out["at_bar_kegs"] = atBar
+	out["open_investigations"] = openInvestigations
 
 	where, args := notifWhere(u)
 	var unread int

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -86,12 +87,17 @@ func (s *Server) handleKegCreate(w http.ResponseWriter, r *http.Request) {
 		req.Deposit = 200
 	}
 	var batchNo, batchStatus string
-	if err := s.db.QueryRow(`SELECT batch_no, status FROM batches WHERE id=$1`, req.BatchID).Scan(&batchNo, &batchStatus); err != nil {
+	var hold bool
+	if err := s.db.QueryRow(`SELECT batch_no, status, delivery_hold FROM batches WHERE id=$1`, req.BatchID).Scan(&batchNo, &batchStatus, &hold); err != nil {
 		writeErr(w, 400, "批次不存在")
 		return
 	}
 	if batchStatus != "active" {
 		writeErr(w, 400, "该批次已停售/召回，不能再灌装")
+		return
+	}
+	if hold {
+		writeErr(w, 400, "该批次口味排查中，已暂停灌装与配送")
 		return
 	}
 	var id int
@@ -154,17 +160,21 @@ func (s *Server) handleKegDetail(w http.ResponseWriter, r *http.Request) {
 	out["events"] = events
 
 	feedbacks := []map[string]any{}
-	rows, err = s.db.Query(`SELECT f.pour_speed, f.pressure_issue, f.taste_issue, f.complaint, f.detail,
+	rows, err = s.db.Query(`SELECT f.pour_speed, f.pressure_issue, f.taste_issue, f.complaint, f.equipment, f.photos, f.detail,
 		COALESCE(br.name,''), to_char(f.created_at,'YYYY-MM-DD HH24:MI')
 		FROM keg_feedback f LEFT JOIN bars br ON br.id=f.bar_id WHERE f.keg_id=$1 ORDER BY f.id`, id)
 	if err == nil {
 		for rows.Next() {
-			var pour, detail, bar, ts string
+			var pour, equipment, photosJSON, detail, bar, ts string
 			var p, t, c bool
-			_ = rows.Scan(&pour, &p, &t, &c, &detail, &bar, &ts)
+			_ = rows.Scan(&pour, &p, &t, &c, &equipment, &photosJSON, &detail, &bar, &ts)
+			photos := []string{}
+			if photosJSON != "" {
+				_ = json.Unmarshal([]byte(photosJSON), &photos)
+			}
 			feedbacks = append(feedbacks, map[string]any{
 				"pour_speed": pour, "pressure_issue": p, "taste_issue": t, "complaint": c,
-				"detail": detail, "bar_name": bar, "time": ts,
+				"equipment": equipment, "photos": photos, "detail": detail, "bar_name": bar, "time": ts,
 			})
 		}
 		rows.Close()
@@ -278,29 +288,47 @@ func (s *Server) handleKegFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PourSpeed     string `json:"pour_speed"`
-		PressureIssue bool   `json:"pressure_issue"`
-		TasteIssue    bool   `json:"taste_issue"`
-		Complaint     bool   `json:"complaint"`
-		Detail        string `json:"detail"`
+		PourSpeed     string   `json:"pour_speed"`
+		PressureIssue bool     `json:"pressure_issue"`
+		TasteIssue    bool     `json:"taste_issue"`
+		Complaint     bool     `json:"complaint"`
+		Equipment     string   `json:"equipment"`
+		Photos        []string `json:"photos"`
+		Detail        string   `json:"detail"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeErr(w, 400, "请求格式错误")
 		return
 	}
+	if len(req.Photos) > 3 {
+		writeErr(w, 400, "客诉照片最多 3 张")
+		return
+	}
+	for _, p := range req.Photos {
+		if len(p) > 800*1024 {
+			writeErr(w, 400, "单张照片不能超过约 600KB，请压缩后上传")
+			return
+		}
+	}
+	photosJSON := ""
+	if len(req.Photos) > 0 {
+		if b, err := json.Marshal(req.Photos); err == nil {
+			photosJSON = string(b)
+		}
+	}
 	var batchID int
 	var kegNo, batchNo string
 	_ = s.db.QueryRow(`SELECT k.batch_id, k.keg_no, COALESCE(b.batch_no,'') FROM kegs k
 		LEFT JOIN batches b ON b.id=k.batch_id WHERE k.id=$1`, id).Scan(&batchID, &kegNo, &batchNo)
-	if _, err := s.db.Exec(`INSERT INTO keg_feedback (keg_id, batch_id, bar_id, pour_speed, pressure_issue, taste_issue, complaint, detail, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		id, batchID, u.BarID, req.PourSpeed, req.PressureIssue, req.TasteIssue, req.Complaint, req.Detail, u.ID); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO keg_feedback (keg_id, batch_id, bar_id, pour_speed, pressure_issue, taste_issue, complaint, equipment, photos, detail, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		id, batchID, u.BarID, req.PourSpeed, req.PressureIssue, req.TasteIssue, req.Complaint, req.Equipment, photosJSON, req.Detail, u.ID); err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
 	s.logEvent(id, "开桶反馈", u, req.Detail)
 
-	// 批次口味被多家投诉 → 自动生成品控工单
+	// 批次口味被多家投诉 → 自动生成品控工单 + 口味异常排查单（批次暂停配送）
 	if req.TasteIssue || req.Complaint {
 		var bars int
 		_ = s.db.QueryRow(`SELECT count(DISTINCT bar_id) FROM keg_feedback
@@ -317,6 +345,8 @@ func (s *Server) handleKegFeedback(w http.ResponseWriter, r *http.Request) {
 					s.notify(nil, "warehouse", nil, nil, "case", "批次口味投诉工单 "+caseNo, detail)
 				}
 			}
+			trigger := fmt.Sprintf("已有 %d 家酒吧反馈批次 %s 口味异常/客诉（最新：%s）。", bars, batchNo, req.Detail)
+			s.openInvestigationForBatch(batchID, trigger, u)
 		}
 	}
 	writeJSON(w, 200, map[string]string{"status": "ok"})
@@ -412,12 +442,17 @@ func (s *Server) handleKegRefill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var batchNo, batchStatus string
-	if err := s.db.QueryRow(`SELECT batch_no, status FROM batches WHERE id=$1`, req.BatchID).Scan(&batchNo, &batchStatus); err != nil {
+	var hold bool
+	if err := s.db.QueryRow(`SELECT batch_no, status, delivery_hold FROM batches WHERE id=$1`, req.BatchID).Scan(&batchNo, &batchStatus, &hold); err != nil {
 		writeErr(w, 400, "批次不存在")
 		return
 	}
 	if batchStatus != "active" {
 		writeErr(w, 400, "目标批次已停售/召回")
+		return
+	}
+	if hold {
+		writeErr(w, 400, "目标批次口味排查中，已暂停灌装与配送")
 		return
 	}
 	if _, err := s.db.Exec(`UPDATE kegs SET batch_id=$1, status='in_warehouse', current_bar_id=NULL,

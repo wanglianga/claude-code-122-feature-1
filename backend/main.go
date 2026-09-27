@@ -126,6 +126,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/cases/{id}/notes", s.auth(s.handleCaseNote))
 	mux.HandleFunc("POST /api/cases/{id}/resolve", s.auth(s.handleCaseResolve))
 
+	mux.HandleFunc("GET /api/investigations", s.auth(s.handleInvestList))
+	mux.HandleFunc("POST /api/investigations", s.auth(s.handleInvestCreate))
+	mux.HandleFunc("GET /api/investigations/{id}", s.auth(s.handleInvestDetail))
+	mux.HandleFunc("POST /api/investigations/{id}/conclude", s.auth(s.handleInvestConclude))
+
 	mux.HandleFunc("GET /api/deposits", s.auth(s.handleDepositList))
 	mux.HandleFunc("GET /api/deposits/summary", s.auth(s.handleDepositSummary))
 	mux.HandleFunc("POST /api/deposits/{id}/settle", s.auth(s.handleDepositSettle))

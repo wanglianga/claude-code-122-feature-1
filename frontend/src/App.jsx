@@ -12,19 +12,21 @@ import BarOps from './pages/BarOps'
 import Pickups from './pages/Pickups'
 import Wash from './pages/Wash'
 import Cases from './pages/Cases'
+import Investigations from './pages/Investigations'
 import Deposits from './pages/Deposits'
 import Notifications from './pages/Notifications'
 import Admin from './pages/Admin'
 
 const MENU = [
   { path: '/', label: '仪表盘', roles: null },
-  { path: '/batches', label: '批次管理', roles: ['admin', 'warehouse', 'qc', 'finance', 'dealer'] },
+  { path: '/batches', label: '批次管理', roles: ['admin', 'warehouse', 'qc', 'finance', 'dealer', 'sales'] },
   { path: '/kegs', label: '酒桶追溯', roles: null },
   { path: '/shipments', label: '配送订单', roles: ['admin', 'warehouse', 'driver', 'bar_manager', 'dealer'] },
   { path: '/bar', label: '酒吧操作', roles: ['bar_manager'] },
   { path: '/pickups', label: '回收预约', roles: ['admin', 'warehouse', 'driver', 'bar_manager'] },
   { path: '/wash', label: '清洗检测', roles: ['admin', 'washer', 'qc'] },
   { path: '/cases', label: '协同工单', roles: null },
+  { path: '/investigations', label: '口味排查', roles: ['admin', 'qc', 'warehouse', 'sales', 'finance'] },
   { path: '/deposits', label: '押金台账', roles: ['admin', 'finance', 'bar_manager', 'warehouse', 'dealer'] },
   { path: '/notifications', label: '通知中心', roles: null },
   { path: '/admin', label: '基础数据', roles: ['admin'] },
@@ -114,6 +116,7 @@ export default function App() {
           <Route path="/pickups" element={<Pickups user={user} />} />
           <Route path="/wash" element={<Wash user={user} />} />
           <Route path="/cases" element={<Cases user={user} />} />
+          <Route path="/investigations" element={<Investigations user={user} />} />
           <Route path="/deposits" element={<Deposits user={user} />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/admin" element={<Admin user={user} />} />

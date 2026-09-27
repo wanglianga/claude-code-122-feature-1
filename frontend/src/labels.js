@@ -30,6 +30,8 @@ export const CASE_TYPE = {
 }
 export const CASE_STATUS = { open: '待处理', processing: '处理中', resolved: '已结案' }
 export const BATCH_STATUS = { active: '在售', suspended: '已停售', recalled: '已召回' }
+export const INVEST_STATUS = { investigating: '排查中', concluded: '已结论' }
+export const CONCLUSION = { recall: '召回', discount: '折价', release: '排除异常·恢复配送' }
 export const ENTRY_TYPE = { charge: '收取', release: '释放', deduction: '扣减' }
 export const DEPOSIT_STATUS = { pending: '待结算', settled: '已结算' }
 export const ROLE = {
@@ -41,6 +43,7 @@ export const ROLE = {
   qc: '品控',
   finance: '财务',
   dealer: '经销商',
+  sales: '销售',
 }
 export const TONE = {
   in_warehouse: 'gray', in_transit: 'blue', at_bar: 'green', opened: 'amber',
@@ -52,8 +55,11 @@ export const TONE = {
   delivered: 'blue', received: 'green', held: 'red', cancelled: 'gray',
   charge: 'blue', release: 'green', deduction: 'red',
   pass: 'green', fail: 'red',
+  investigating: 'amber', concluded: 'green',
+  recall: 'red', discount: 'amber',
 }
 export const APPEARANCES = ['完好', '变形', '破损']
 export const RESIDUALS = ['无', '少量', '较多']
 export const CAP_STATUSES = ['完好', '缺失', '损坏']
 export const POUR_SPEEDS = ['正常', '偏慢', '偏快']
+export const EQUIPMENTS = ['酒头直出', '酒柱', '长距离管线', '派对桶泵']

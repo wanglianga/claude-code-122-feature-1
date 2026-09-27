@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { api } from '../api'
-import { Empty, ErrorBox, Field, KV, Modal, OkBox, Tag } from '../components'
-import { BATCH_STATUS, CASE_STATUS, CASE_TYPE, DEPOSIT_STATUS, ENTRY_TYPE, KEG_STATUS, POUR_SPEEDS } from '../labels'
+import { Empty, ErrorBox, FeedbackFields, Field, KV, Modal, OkBox, PhotoThumbs, Tag } from '../components'
+import { BATCH_STATUS, CASE_STATUS, CASE_TYPE, DEPOSIT_STATUS, ENTRY_TYPE, KEG_STATUS } from '../labels'
 
 export default function KegDetail({ user }) {
   const { id } = useParams()
@@ -11,7 +11,7 @@ export default function KegDetail({ user }) {
   const [error, setError] = useState('')
   const [ok, setOk] = useState('')
   const [modal, setModal] = useState('') // feedback | wash | refill | deduct | lost
-  const [fb, setFb] = useState({ pour_speed: '正常', pressure_issue: false, taste_issue: false, complaint: false, detail: '' })
+  const [fb, setFb] = useState({ pour_speed: '正常', pressure_issue: false, taste_issue: false, complaint: false, equipment: '酒头直出', photos: [], detail: '' })
   const [washNote, setWashNote] = useState('')
   const [refillBatch, setRefillBatch] = useState('')
   const [deduct, setDeduct] = useState({ amount: '', reason: '' })
@@ -109,7 +109,7 @@ export default function KegDetail({ user }) {
         <h3>开桶反馈（{k.feedbacks.length}）</h3>
         {k.feedbacks.length === 0 ? <Empty /> : (
           <table>
-            <thead><tr><th>酒吧</th><th>出酒</th><th>气压</th><th>口味</th><th>客诉</th><th>详情</th><th>时间</th></tr></thead>
+            <thead><tr><th>酒吧</th><th>出酒</th><th>气压</th><th>口味</th><th>客诉</th><th>出酒设备</th><th>照片</th><th>详情</th><th>时间</th></tr></thead>
             <tbody>
               {k.feedbacks.map((f, i) => (
                 <tr key={i}>
@@ -118,6 +118,8 @@ export default function KegDetail({ user }) {
                   <td>{f.pressure_issue ? '⚠️' : '—'}</td>
                   <td>{f.taste_issue ? '⚠️' : '—'}</td>
                   <td>{f.complaint ? '⚠️' : '—'}</td>
+                  <td>{f.equipment || '—'}</td>
+                  <td><PhotoThumbs photos={f.photos} /></td>
                   <td>{f.detail}</td>
                   <td className="muted">{f.time}</td>
                 </tr>
@@ -188,21 +190,7 @@ export default function KegDetail({ user }) {
 
       {modal === 'feedback' && (
         <Modal title={`开桶反馈 · ${k.keg_no}`} onClose={() => setModal('')}>
-          <Field label="出酒速度">
-            <select value={fb.pour_speed} onChange={(e) => setFb({ ...fb, pour_speed: e.target.value })}>
-              {POUR_SPEEDS.map((s) => <option key={s}>{s}</option>)}
-            </select>
-          </Field>
-          <div className="field">
-            <label style={{ display: 'flex', gap: 16 }}>
-              <span><input type="checkbox" style={{ width: 'auto' }} checked={fb.pressure_issue} onChange={(e) => setFb({ ...fb, pressure_issue: e.target.checked })} /> 气压问题</span>
-              <span><input type="checkbox" style={{ width: 'auto' }} checked={fb.taste_issue} onChange={(e) => setFb({ ...fb, taste_issue: e.target.checked })} /> 口味异常</span>
-              <span><input type="checkbox" style={{ width: 'auto' }} checked={fb.complaint} onChange={(e) => setFb({ ...fb, complaint: e.target.checked })} /> 客诉</span>
-            </label>
-          </div>
-          <Field label="详情">
-            <textarea value={fb.detail} onChange={(e) => setFb({ ...fb, detail: e.target.value })} placeholder="描述出酒、气压、口味或客诉情况" />
-          </Field>
+          <FeedbackFields fb={fb} setFb={setFb} />
           <div className="actions">
             <button onClick={() => setModal('')}>取消</button>
             <button className="primary" onClick={() => act(`/kegs/${k.id}/feedback`, fb)}>提交反馈</button>

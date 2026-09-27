@@ -18,10 +18,23 @@ func (s *Server) holdShipmentsForBatch(batchID int) int {
 	return int(n)
 }
 
+// unholdShipmentsForBatch 恢复因排查暂缓的订单（已暂缓 → 待配送），返回恢复订单数。
+func (s *Server) unholdShipmentsForBatch(batchID int) int {
+	res, err := s.db.Exec(`UPDATE shipments SET status='pending'
+		WHERE status='held' AND id IN (
+			SELECT sk.shipment_id FROM shipment_kegs sk JOIN kegs k ON k.id=sk.keg_id WHERE k.batch_id=$1
+		)`, batchID)
+	if err != nil {
+		return 0
+	}
+	n, _ := res.RowsAffected()
+	return int(n)
+}
+
 func (s *Server) handleBatchList(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(`
 		SELECT b.id, b.batch_no, b.style, to_char(b.fill_date,'YYYY-MM-DD'), to_char(b.best_before,'YYYY-MM-DD'),
-			b.status, b.suspend_reason,
+			b.status, b.suspend_reason, b.delivery_hold,
 			(SELECT count(*) FROM kegs k WHERE k.batch_id=b.id),
 			(SELECT count(*) FROM keg_feedback f WHERE f.batch_id=b.id AND (f.taste_issue OR f.complaint)),
 			(SELECT count(DISTINCT f.bar_id) FROM keg_feedback f WHERE f.batch_id=b.id AND (f.taste_issue OR f.complaint))
@@ -35,13 +48,14 @@ func (s *Server) handleBatchList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id, kegTotal, complaints, complaintBars int
 		var no, style, fill, best, status, reason string
-		if err := rows.Scan(&id, &no, &style, &fill, &best, &status, &reason, &kegTotal, &complaints, &complaintBars); err != nil {
+		var hold bool
+		if err := rows.Scan(&id, &no, &style, &fill, &best, &status, &reason, &hold, &kegTotal, &complaints, &complaintBars); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
 		list = append(list, map[string]any{
 			"id": id, "batch_no": no, "style": style, "fill_date": fill, "best_before": best,
-			"status": status, "suspend_reason": reason, "keg_total": kegTotal,
+			"status": status, "suspend_reason": reason, "delivery_hold": hold, "keg_total": kegTotal,
 			"complaints": complaints, "complaint_bars": complaintBars,
 		})
 	}
@@ -82,14 +96,15 @@ func (s *Server) handleBatchDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	var b map[string]any
 	var no, style, fill, best, status, reason string
-	err = s.db.QueryRow(`SELECT batch_no, style, to_char(fill_date,'YYYY-MM-DD'), to_char(best_before,'YYYY-MM-DD'), status, suspend_reason
-		FROM batches WHERE id=$1`, id).Scan(&no, &style, &fill, &best, &status, &reason)
+	var hold bool
+	err = s.db.QueryRow(`SELECT batch_no, style, to_char(fill_date,'YYYY-MM-DD'), to_char(best_before,'YYYY-MM-DD'), status, suspend_reason, delivery_hold
+		FROM batches WHERE id=$1`, id).Scan(&no, &style, &fill, &best, &status, &reason, &hold)
 	if err != nil {
 		writeErr(w, 404, "批次不存在")
 		return
 	}
 	b = map[string]any{"id": id, "batch_no": no, "style": style, "fill_date": fill, "best_before": best,
-		"status": status, "suspend_reason": reason}
+		"status": status, "suspend_reason": reason, "delivery_hold": hold}
 
 	kegs := []map[string]any{}
 	rows, err := s.db.Query(`
@@ -222,33 +237,16 @@ func (s *Server) handleBatchSuspend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"status": "suspended", "held_shipments": held, "notified_bars": len(barIDs), "notified_dealers": len(dealerIDs)})
 }
 
-func (s *Server) handleBatchRecall(w http.ResponseWriter, r *http.Request) {
-	u := userOf(r)
-	if !requireRole(u, "qc") {
-		writeErr(w, 403, "仅品控可发起批次召回")
-		return
-	}
-	id, err := pathID(r, "id")
-	if err != nil {
-		writeErr(w, 400, "无效批次 ID")
-		return
-	}
-	var req struct {
-		Reason string `json:"reason"`
-	}
-	_ = decodeBody(r, &req)
-	if req.Reason == "" {
-		req.Reason = "批次质量召回"
-	}
+// recallBatch 执行批次召回：更新状态、暂缓配送、拆分已售/已开桶/未开桶库存并通知酒吧/经销商/仓库/财务/销售。
+// 返回批次号、库存拆分与通知统计；供「批次召回」接口与「口味排查品控结论」共用。
+func (s *Server) recallBatch(id int, reason string) (map[string]any, error) {
 	var batchNo string
-	err = s.db.QueryRow(`SELECT batch_no FROM batches WHERE id=$1 AND status <> 'recalled'`, id).Scan(&batchNo)
+	err := s.db.QueryRow(`SELECT batch_no FROM batches WHERE id=$1 AND status <> 'recalled'`, id).Scan(&batchNo)
 	if err != nil {
-		writeErr(w, 400, "批次不存在或已召回")
-		return
+		return nil, fmt.Errorf("批次不存在或已召回")
 	}
-	if _, err := s.db.Exec(`UPDATE batches SET status='recalled', suspend_reason=$1 WHERE id=$2`, req.Reason, id); err != nil {
-		writeErr(w, 500, err.Error())
-		return
+	if _, err := s.db.Exec(`UPDATE batches SET status='recalled', suspend_reason=$1, delivery_hold=FALSE WHERE id=$2`, reason, id); err != nil {
+		return nil, err
 	}
 	held := s.holdShipmentsForBatch(id)
 
@@ -285,15 +283,16 @@ func (s *Server) handleBatchRecall(w http.ResponseWriter, r *http.Request) {
 
 	barIDs, dealerIDs := s.batchBarsAndDealers(id)
 	content := fmt.Sprintf("批次 %s 已启动召回（%s）。已售卖 %d 桶、已开桶 %d 桶、未开桶 %d 桶；%d 个待配送/配送中订单已暂缓。已开桶/未开桶请立即停售并预约回收。",
-		batchNo, req.Reason, len(sold), len(opened), len(unopened), held)
+		batchNo, reason, len(sold), len(opened), len(unopened), held)
 	for _, barID := range barIDs {
 		s.notify(nil, "", &barID, nil, "batch_recall", "批次召回通知："+batchNo, content)
 	}
 	for _, dealerID := range dealerIDs {
 		s.notify(nil, "", nil, &dealerID, "batch_recall", "批次召回通知："+batchNo, content+" 请核对经销商库存并停止出货。")
 	}
-	s.notify(nil, "warehouse", nil, nil, "batch_recall", "批次召回通知："+batchNo, content)
+	s.notify(nil, "warehouse", nil, nil, "batch_recall", "批次召回通知："+batchNo, content+" 请仓库核对在库酒桶并安排替换批次备货。")
 	s.notify(nil, "finance", nil, nil, "batch_recall", "批次召回通知："+batchNo, content)
+	s.notify(nil, "sales", nil, nil, "batch_recall", "批次召回通知："+batchNo, content+" 请销售跟进受影响酒吧的换货与客情维护。")
 
 	toJSON := func(list []kegRow) []map[string]any {
 		out := []map[string]any{}
@@ -302,9 +301,36 @@ func (s *Server) handleBatchRecall(w http.ResponseWriter, r *http.Request) {
 		}
 		return out
 	}
-	writeJSON(w, 200, map[string]any{
-		"status": "recalled", "held_shipments": held,
+	return map[string]any{
+		"batch_no": batchNo, "status": "recalled", "held_shipments": held,
 		"sold": toJSON(sold), "opened": toJSON(opened), "unopened": toJSON(unopened),
 		"notified_bars": len(barIDs), "notified_dealers": len(dealerIDs),
-	})
+	}, nil
+}
+
+func (s *Server) handleBatchRecall(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	if !requireRole(u, "qc") {
+		writeErr(w, 403, "仅品控可发起批次召回")
+		return
+	}
+	id, err := pathID(r, "id")
+	if err != nil {
+		writeErr(w, 400, "无效批次 ID")
+		return
+	}
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = decodeBody(r, &req)
+	if req.Reason == "" {
+		req.Reason = "批次质量召回"
+	}
+	res, err := s.recallBatch(id, req.Reason)
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	delete(res, "batch_no")
+	writeJSON(w, 200, res)
 }

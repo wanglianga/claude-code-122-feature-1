@@ -41,6 +41,7 @@ function BatchDetail({ id, user, onClose, onChanged }) {
         <div><div className="k">灌装日期</div><div className="v">{b.fill_date}</div></div>
         <div><div className="k">最佳饮用期</div><div className="v">{b.best_before}</div></div>
         <div><div className="k">状态</div><div className="v"><Tag label={BATCH_STATUS[b.status] || b.status} /></div></div>
+        <div><div className="k">配送状态</div><div className="v">{b.delivery_hold ? <Tag label="暂停配送（排查中）" tone="amber" /> : '正常'}</div></div>
         {b.suspend_reason && <div><div className="k">停售/召回原因</div><div className="v">{b.suspend_reason}</div></div>}
       </div>
 
@@ -206,7 +207,10 @@ export default function Batches({ user }) {
                   <td>{b.style}</td>
                   <td>{b.fill_date}</td>
                   <td>{b.best_before}</td>
-                  <td><Tag label={BATCH_STATUS[b.status] || b.status} /></td>
+                  <td>
+                    <Tag label={BATCH_STATUS[b.status] || b.status} />
+                    {b.delivery_hold && <> <Tag label="暂停配送" tone="amber" /></>}
+                  </td>
                   <td>{b.keg_total}</td>
                   <td>{b.complaints > 0 ? <span style={{ color: 'var(--red)' }}>{b.complaints}（{b.complaint_bars}家）</span> : '—'}</td>
                   <td><button className="small" onClick={() => setDetailId(b.id)}>详情</button></td>

@@ -38,6 +38,7 @@ func migrate(db *sql.DB) error {
 			best_before DATE NOT NULL,
 			status TEXT NOT NULL DEFAULT 'active',
 			suspend_reason TEXT DEFAULT '',
+			delivery_hold BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at TIMESTAMPTZ DEFAULT now()
 		)`,
 		`CREATE TABLE IF NOT EXISTS kegs (
@@ -63,6 +64,7 @@ func migrate(db *sql.DB) error {
 			driver_id INT REFERENCES users(id),
 			status TEXT NOT NULL DEFAULT 'pending',
 			is_festival BOOLEAN NOT NULL DEFAULT FALSE,
+			transport_temp_c NUMERIC(4,1),
 			note TEXT DEFAULT '',
 			receiver_name TEXT DEFAULT '',
 			created_at TIMESTAMPTZ DEFAULT now(),
@@ -84,6 +86,8 @@ func migrate(db *sql.DB) error {
 			pressure_issue BOOLEAN NOT NULL DEFAULT FALSE,
 			taste_issue BOOLEAN NOT NULL DEFAULT FALSE,
 			complaint BOOLEAN NOT NULL DEFAULT FALSE,
+			equipment TEXT DEFAULT '',
+			photos TEXT DEFAULT '',
 			detail TEXT DEFAULT '',
 			created_by INT REFERENCES users(id),
 			created_at TIMESTAMPTZ DEFAULT now()
@@ -166,6 +170,20 @@ func migrate(db *sql.DB) error {
 			read BOOLEAN NOT NULL DEFAULT FALSE,
 			created_at TIMESTAMPTZ DEFAULT now()
 		)`,
+		`CREATE TABLE IF NOT EXISTS investigations (
+			id SERIAL PRIMARY KEY,
+			inv_no TEXT UNIQUE NOT NULL,
+			batch_id INT REFERENCES batches(id),
+			status TEXT NOT NULL DEFAULT 'investigating',
+			trigger_detail TEXT DEFAULT '',
+			conclusion TEXT DEFAULT '',
+			conclusion_note TEXT DEFAULT '',
+			discount_percent NUMERIC(5,2),
+			created_by INT,
+			created_at TIMESTAMPTZ DEFAULT now(),
+			concluded_by INT,
+			concluded_at TIMESTAMPTZ
+		)`,
 		`CREATE TABLE IF NOT EXISTS keg_events (
 			id SERIAL PRIMARY KEY,
 			keg_id INT REFERENCES kegs(id),
@@ -181,6 +199,12 @@ func migrate(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_feedback_batch ON keg_feedback(batch_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_deposit_keg ON deposit_ledger(keg_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_keg ON keg_events(keg_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_invest_batch ON investigations(batch_id)`,
+		// 老库升级：补充口味排查相关字段（幂等）
+		`ALTER TABLE batches ADD COLUMN IF NOT EXISTS delivery_hold BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS transport_temp_c NUMERIC(4,1)`,
+		`ALTER TABLE keg_feedback ADD COLUMN IF NOT EXISTS equipment TEXT DEFAULT ''`,
+		`ALTER TABLE keg_feedback ADD COLUMN IF NOT EXISTS photos TEXT DEFAULT ''`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {

@@ -33,7 +33,7 @@ func (s *Server) handleShipmentList(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := s.db.Query(`
 		SELECT sh.id, sh.order_no, COALESCE(d.name,''), COALESCE(b.name,''), COALESCE(dr.name,''),
-			sh.status, sh.is_festival, sh.note, sh.receiver_name,
+			sh.status, sh.is_festival, sh.note, sh.receiver_name, sh.transport_temp_c,
 			to_char(sh.created_at,'YYYY-MM-DD HH24:MI'),
 			(SELECT count(*) FROM shipment_kegs sk WHERE sk.shipment_id=sh.id)
 		FROM shipments sh
@@ -51,14 +51,15 @@ func (s *Server) handleShipmentList(w http.ResponseWriter, r *http.Request) {
 		var id, kegCount int
 		var orderNo, dealer, bar, driver, status, note, receiver, ts string
 		var festival bool
-		if err := rows.Scan(&id, &orderNo, &dealer, &bar, &driver, &status, &festival, &note, &receiver, &ts, &kegCount); err != nil {
+		var temp *float64
+		if err := rows.Scan(&id, &orderNo, &dealer, &bar, &driver, &status, &festival, &note, &receiver, &temp, &ts, &kegCount); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
 		list = append(list, map[string]any{
 			"id": id, "order_no": orderNo, "dealer_name": dealer, "bar_name": bar, "driver_name": driver,
 			"status": status, "is_festival": festival, "note": note, "receiver_name": receiver,
-			"created_at": ts, "keg_count": kegCount,
+			"transport_temp_c": temp, "created_at": ts, "keg_count": kegCount,
 		})
 	}
 	writeJSON(w, 200, list)
@@ -71,11 +72,12 @@ func (s *Server) handleShipmentCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		BarID      int    `json:"bar_id"`
-		DriverID   int    `json:"driver_id"`
-		KegIDs     []int  `json:"keg_ids"`
-		IsFestival bool   `json:"is_festival"`
-		Note       string `json:"note"`
+		BarID          int      `json:"bar_id"`
+		DriverID       int      `json:"driver_id"`
+		KegIDs         []int    `json:"keg_ids"`
+		IsFestival     bool     `json:"is_festival"`
+		TransportTempC *float64 `json:"transport_temp_c"`
+		Note           string   `json:"note"`
 	}
 	if err := decodeBody(r, &req); err != nil || req.BarID == 0 || req.DriverID == 0 || len(req.KegIDs) == 0 {
 		writeErr(w, 400, "酒吧/司机/酒桶均为必填")
@@ -87,11 +89,13 @@ func (s *Server) handleShipmentCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "酒吧不存在")
 		return
 	}
-	// 校验酒桶均在库且批次在售
+	// 校验酒桶均在库、批次在售且未因口味排查暂停配送
 	for _, kid := range req.KegIDs {
-		var status, batchStatus string
-		err := s.db.QueryRow(`SELECT k.status, COALESCE(b.status,'active') FROM kegs k
-			LEFT JOIN batches b ON b.id=k.batch_id WHERE k.id=$1`, kid).Scan(&status, &batchStatus)
+		var status, batchStatus, batchNo string
+		var hold bool
+		err := s.db.QueryRow(`SELECT k.status, COALESCE(b.status,'active'), COALESCE(b.batch_no,''), COALESCE(b.delivery_hold,FALSE)
+			FROM kegs k LEFT JOIN batches b ON b.id=k.batch_id WHERE k.id=$1`, kid).
+			Scan(&status, &batchStatus, &batchNo, &hold)
 		if err != nil {
 			writeErr(w, 400, fmt.Sprintf("酒桶 %d 不存在", kid))
 			return
@@ -104,11 +108,15 @@ func (s *Server) handleShipmentCreate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 400, fmt.Sprintf("酒桶 %d 所属批次已停售/召回，禁止出库", kid))
 			return
 		}
+		if hold {
+			writeErr(w, 400, fmt.Sprintf("批次 %s 口味排查中，已暂停配送，禁止出库", batchNo))
+			return
+		}
 	}
 	var shID int
-	err := s.db.QueryRow(`INSERT INTO shipments (order_no, dealer_id, bar_id, driver_id, is_festival, note)
-		VALUES ('', $1, $2, $3, $4, $5) RETURNING id`,
-		nullInt(dealerID), req.BarID, req.DriverID, req.IsFestival, req.Note).Scan(&shID)
+	err := s.db.QueryRow(`INSERT INTO shipments (order_no, dealer_id, bar_id, driver_id, is_festival, transport_temp_c, note)
+		VALUES ('', $1, $2, $3, $4, $5, $6) RETURNING id`,
+		nullInt(dealerID), req.BarID, req.DriverID, req.IsFestival, nullFloat(req.TransportTempC), req.Note).Scan(&shID)
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
@@ -138,10 +146,11 @@ func (s *Server) handleShipmentDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	var orderNo, dealer, bar, driver, status, note, receiver string
 	var festival bool
+	var temp *float64
 	var created, started, delivered, received *string
 	err = s.db.QueryRow(`
 		SELECT sh.order_no, COALESCE(d.name,''), COALESCE(b.name,''), COALESCE(dr.name,''),
-			sh.status, sh.is_festival, sh.note, sh.receiver_name,
+			sh.status, sh.is_festival, sh.note, sh.receiver_name, sh.transport_temp_c,
 			to_char(sh.created_at,'YYYY-MM-DD HH24:MI'), to_char(sh.started_at,'YYYY-MM-DD HH24:MI'),
 			to_char(sh.delivered_at,'YYYY-MM-DD HH24:MI'), to_char(sh.received_at,'YYYY-MM-DD HH24:MI')
 		FROM shipments sh
@@ -149,7 +158,7 @@ func (s *Server) handleShipmentDetail(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN bars b ON b.id=sh.bar_id
 		LEFT JOIN users dr ON dr.id=sh.driver_id
 		WHERE sh.id=$1`, id).
-		Scan(&orderNo, &dealer, &bar, &driver, &status, &festival, &note, &receiver,
+		Scan(&orderNo, &dealer, &bar, &driver, &status, &festival, &note, &receiver, &temp,
 			&created, &started, &delivered, &received)
 	if err != nil {
 		writeErr(w, 404, "配送单不存在")
@@ -177,7 +186,8 @@ func (s *Server) handleShipmentDetail(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{
 		"id": id, "order_no": orderNo, "dealer_name": dealer, "bar_name": bar, "driver_name": driver,
 		"status": status, "is_festival": festival, "note": note, "receiver_name": receiver,
-		"created_at": created, "started_at": started, "delivered_at": delivered, "received_at": received,
+		"transport_temp_c": temp,
+		"created_at":       created, "started_at": started, "delivered_at": delivered, "received_at": received,
 		"kegs": kegs,
 	})
 }
@@ -232,7 +242,17 @@ func (s *Server) handleShipmentDeliver(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "仅配送中订单可标记送达")
 		return
 	}
-	_, _ = s.db.Exec(`UPDATE shipments SET status='delivered', delivered_at=now() WHERE id=$1`, id)
+	// 可选：司机送达时登记实际运输温度（冷链记录，供口味排查关联）
+	var req struct {
+		TransportTempC *float64 `json:"transport_temp_c"`
+	}
+	_ = decodeBody(r, &req)
+	if req.TransportTempC != nil {
+		_, _ = s.db.Exec(`UPDATE shipments SET status='delivered', delivered_at=now(), transport_temp_c=$1 WHERE id=$2`,
+			nullFloat(req.TransportTempC), id)
+	} else {
+		_, _ = s.db.Exec(`UPDATE shipments SET status='delivered', delivered_at=now() WHERE id=$1`, id)
+	}
 	var barID *int
 	_ = s.db.QueryRow(`SELECT bar_id FROM shipments WHERE id=$1`, id).Scan(&barID)
 	s.notify(nil, "", barID, nil, "shipment", "酒桶已送达", "配送单已送达，请核对酒桶并确认签收。")
